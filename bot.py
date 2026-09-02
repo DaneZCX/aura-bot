@@ -3,19 +3,25 @@ import random
 import sqlite3
 import threading
 from datetime import date
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import telebot
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
 TOKEN = os.environ["BOT_TOKEN"]
 
 bot = telebot.TeleBot(TOKEN)
 
-db = sqlite3.connect("aura.db", check_same_thread=False)
-cursor = db.cursor()
+DB_FILE = "aura.db"
 
-cursor.execute("""
+
+def get_db():
+    return sqlite3.connect(DB_FILE, timeout=10)
+
+
+# Создаём таблицу
+db = get_db()
+db.execute("""
 CREATE TABLE IF NOT EXISTS users (
     user_id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
@@ -24,6 +30,7 @@ CREATE TABLE IF NOT EXISTS users (
 )
 """)
 db.commit()
+db.close()
 
 
 @bot.message_handler(commands=["farm_aura"])
@@ -32,39 +39,44 @@ def farm_aura(message):
     name = message.from_user.first_name or "Игрок"
     today = str(date.today())
 
-    cursor.execute(
-        "SELECT aura, last_farm FROM users WHERE user_id = ?",
-        (user_id,)
-    )
-    user = cursor.fetchone()
+    db = get_db()
 
-    if user is None:
-        aura = 0
-        last_farm = None
+    try:
+        user = db.execute(
+            "SELECT aura, last_farm FROM users WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
 
-        cursor.execute(
-            "INSERT INTO users (user_id, name, aura, last_farm) VALUES (?, ?, ?, ?)",
-            (user_id, name, 0, None)
+        if user is None:
+            aura = 0
+            last_farm = None
+
+            db.execute(
+                "INSERT INTO users (user_id, name, aura, last_farm) VALUES (?, ?, ?, ?)",
+                (user_id, name, 0, None)
+            )
+            db.commit()
+        else:
+            aura, last_farm = user
+
+        if last_farm == today:
+            bot.reply_to(
+                message,
+                "💀 Ты уже фармил ауру сегодня!\nПриходи завтра."
+            )
+            return
+
+        gained = random.randint(-3, 10)
+        new_aura = aura + gained
+
+        db.execute(
+            "UPDATE users SET name = ?, aura = ?, last_farm = ? WHERE user_id = ?",
+            (name, new_aura, today, user_id)
         )
         db.commit()
-    else:
-        aura, last_farm = user
 
-    if last_farm == today:
-        bot.reply_to(
-            message,
-            "💀 Ты уже фармил ауру сегодня!\nПриходи завтра."
-        )
-        return
-
-    gained = random.randint(-3, 10)
-    new_aura = aura + gained
-
-    cursor.execute(
-        "UPDATE users SET name = ?, aura = ?, last_farm = ? WHERE user_id = ?",
-        (name, new_aura, today, user_id)
-    )
-    db.commit()
+    finally:
+        db.close()
 
     if gained > 0:
         result = f"🔥 Ты получил +{gained} ауры!"
@@ -82,10 +94,14 @@ def farm_aura(message):
 
 @bot.message_handler(commands=["rating"])
 def rating(message):
-    cursor.execute(
-        "SELECT name, aura FROM users ORDER BY aura DESC LIMIT 10"
-    )
-    users = cursor.fetchall()
+    db = get_db()
+
+    try:
+        users = db.execute(
+            "SELECT name, aura FROM users ORDER BY aura DESC LIMIT 10"
+        ).fetchall()
+    finally:
+        db.close()
 
     if not users:
         bot.reply_to(message, "🏆 Рейтинг пока пуст!")
@@ -127,4 +143,5 @@ def start_web_server():
 threading.Thread(target=start_web_server, daemon=True).start()
 
 print("Aura bot запущен!")
+
 bot.infinity_polling()
