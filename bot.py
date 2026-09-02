@@ -164,20 +164,20 @@ def cmd_farm_aura(message: Message) -> None:
     new_aura = _apply_farm(chat_id, user_id, amount, today)
 
     if amount > 10:
-        emoji, comment = "🔥😎", "Невероятный день, аура прёт!"
+        emoji, comment = "🔥😎"
     elif amount > 0:
-        emoji, comment = "✨🙂", "Небольшой, но приятный плюсик."
+        emoji, comment = "🥶🥶"
     elif amount == 0:
-        emoji, comment = "😐", "Ни туда ни сюда."
+        emoji, comment = "😬"
     else:
-        emoji, comment = "💀📉", "Ой, сегодня не твой день..."
+        emoji, comment = "💀"
 
     sign = "+" if amount >= 0 else ""
     bot.reply_to(
         message,
-        f"{emoji} {full_name}, ты получил(а) {sign}{amount} ауры!\n"
+        f"{emoji} {full_name}, ты получил(а) {sign}{amount} AURA🔥🔥\n"
         f"{comment}\n"
-        f"💫 Твоя аура сейчас: {new_aura}",
+        f"😎 Твоя AURA сейчас: {new_aura}",
     )
 
 
@@ -189,18 +189,18 @@ def cmd_rating(message: Message) -> None:
     if not rows:
         bot.reply_to(
             message,
-            "Рейтинг пока пуст 😶 Используйте /farm_aura, чтобы начать фармить ауру!",
+            "Рейтинг пока пуст 😶 Используйте /farm_aura, чтобы начать фармить AURA!",
         )
         return
 
     place_emojis = ["🥇", "🥈", "🥉"]
-    lines = ["📊 <b>Рейтинг ауры</b>\n"]
+    lines = ["📊 <b>Рейтинг AURA</b>\n"]
 
     for i, (name, aura) in enumerate(rows):
         if i == 0:
             lines.append(
-                f"{place_emojis[0]} <b>{name}</b> — {aura} 💥\n"
-                f"    😤🔥 Он моггает всех!"
+                f"{place_emojis[0]} <b>{name}</b> — {aura} 🥶\n"
+                f"    😤🔥 Он МОГГАЕТ всех!"
             )
         elif i < len(place_emojis):
             lines.append(f"{place_emojis[i]} {name} — {aura}")
