@@ -1,9 +1,12 @@
 import os
 import random
 import sqlite3
+import threading
 from datetime import date
 
 import telebot
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 
 TOKEN = os.environ["BOT_TOKEN"]
 
@@ -38,10 +41,12 @@ def farm_aura(message):
     if user is None:
         aura = 0
         last_farm = None
+
         cursor.execute(
             "INSERT INTO users (user_id, name, aura, last_farm) VALUES (?, ?, ?, ?)",
             (user_id, name, 0, None)
         )
+        db.commit()
     else:
         aura, last_farm = user
 
@@ -102,6 +107,24 @@ def rating(message):
 
     bot.reply_to(message, text)
 
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Aura bot is alive!")
+
+    def log_message(self, format, *args):
+        return
+
+
+def start_web_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    server.serve_forever()
+
+
+threading.Thread(target=start_web_server, daemon=True).start()
 
 print("Aura bot запущен!")
 bot.infinity_polling()
