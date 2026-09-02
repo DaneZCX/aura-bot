@@ -1,35 +1,44 @@
 """
-Модуль с командами /farm_aura и /rating для Telegram-бота на pyTelegramBotAPI (telebot).
+bot.py — Telegram-бот на pyTelegramBotAPI (telebot), команды /farm_aura и /rating.
 
-Как подключить в свой bot.py:
+Запуск на Render как Web Service: используется webhook вместо polling,
+чтобы не было конфликта 409 и чтобы Render видел открытый порт.
 
-    import telebot
-    from aura_bot import register_aura_handlers, init_db
+requirements.txt должен содержать:
+    pyTelegramBotAPI
+    flask
 
-    bot = telebot.TeleBot(BOT_TOKEN)
-    init_db()
-    register_aura_handlers(bot)
-
-    bot.infinity_polling()
+Environment variables на Render:
+    BOT_TOKEN — токен от @BotFather
+(RENDER_EXTERNAL_URL Render проставляет сам, руками добавлять не нужно)
 """
 
+import os
 import random
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
 import telebot
 from telebot.types import Message
+from flask import Flask, request
 
 DB_PATH = "aura.db"
 
 # Московское время (GMT+3), без привязки к DST — просто фиксированный оффсет
 MSK = timezone(timedelta(hours=3))
 
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")  # авто-переменная Render
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+
+bot = telebot.TeleBot(BOT_TOKEN)
+app = Flask(__name__)
+
 
 # ---------- Работа с БД ----------
 
 def init_db() -> None:
-    """Создаёт таблицу, если её ещё нет. Вызвать один раз при старте бота."""
+    """Создаёт таблицу, если её ещё нет. Вызывается один раз при старте."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute(
         """
@@ -123,91 +132,114 @@ def _display_name(message: Message) -> str:
     return full_name or (f"@{user.username}" if user.username else str(user.id))
 
 
-def register_aura_handlers(bot: telebot.TeleBot) -> None:
-    """Регистрирует хендлеры /farm_aura и /rating на переданном экземпляре бота."""
+@bot.message_handler(commands=["farm_aura"])
+def cmd_farm_aura(message: Message) -> None:
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    username = message.from_user.username
+    full_name = _display_name(message)
 
-    @bot.message_handler(commands=["farm_aura"])
-    def cmd_farm_aura(message: Message) -> None:
-        chat_id = message.chat.id
-        user_id = message.from_user.id
-        username = message.from_user.username
-        full_name = _display_name(message)
+    _upsert_user(chat_id, user_id, username, full_name)
 
-        _upsert_user(chat_id, user_id, username, full_name)
+    today = _get_msk_today_str()
+    last_date = _get_last_farm_date(chat_id, user_id)
 
-        today = _get_msk_today_str()
-        last_date = _get_last_farm_date(chat_id, user_id)
+    if last_date == today:
+        now_msk = datetime.now(MSK)
+        tomorrow_msk = (now_msk + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        left = tomorrow_msk - now_msk
+        hours, rem = divmod(int(left.total_seconds()), 3600)
+        minutes = rem // 60
 
-        if last_date == today:
-            now_msk = datetime.now(MSK)
-            tomorrow_msk = (now_msk + timedelta(days=1)).replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
-            left = tomorrow_msk - now_msk
-            hours, rem = divmod(int(left.total_seconds()), 3600)
-            minutes = rem // 60
-
-            bot.reply_to(
-                message,
-                f"⏳ Ты уже фармил ауру сегодня!\n"
-                f"Приходи через {hours} ч {minutes} мин",
-            )
-            return
-
-        amount = random.randint(-5, 15)
-        new_aura = _apply_farm(chat_id, user_id, amount, today)
-
-        if amount > 10:
-            emoji, comment = "🔥😎", "Невероятный день, аура прёт!"
-        elif amount > 0:
-            emoji, comment = "✨🙂", "Небольшой, но приятный плюсик."
-        elif amount == 0:
-            emoji, comment = "😐", "Ни туда ни сюда."
-        else:
-            emoji, comment = "💀📉", "Ой, сегодня не твой день..."
-
-        sign = "+" if amount >= 0 else ""
         bot.reply_to(
             message,
-            f"{emoji} {full_name}, ты получил(а) {sign}{amount} ауры!\n"
-            f"{comment}\n"
-            f"💫 Твоя аура сейчас: {new_aura}",
+            f"⏳ Ты уже фармил ауру сегодня!\n"
+            f"Приходи через {hours} ч {minutes} мин",
         )
+        return
 
-    @bot.message_handler(commands=["rating"])
-    def cmd_rating(message: Message) -> None:
-        chat_id = message.chat.id
-        rows = _get_rating(chat_id, limit=10)
+    amount = random.randint(-5, 15)
+    new_aura = _apply_farm(chat_id, user_id, amount, today)
 
-        if not rows:
-            bot.reply_to(
-                message,
-                "Рейтинг пока пуст 😶 Используйте /farm_aura, чтобы начать фармить ауру!",
+    if amount > 10:
+        emoji, comment = "🔥😎", "Невероятный день, аура прёт!"
+    elif amount > 0:
+        emoji, comment = "✨🙂", "Небольшой, но приятный плюсик."
+    elif amount == 0:
+        emoji, comment = "😐", "Ни туда ни сюда."
+    else:
+        emoji, comment = "💀📉", "Ой, сегодня не твой день..."
+
+    sign = "+" if amount >= 0 else ""
+    bot.reply_to(
+        message,
+        f"{emoji} {full_name}, ты получил(а) {sign}{amount} ауры!\n"
+        f"{comment}\n"
+        f"💫 Твоя аура сейчас: {new_aura}",
+    )
+
+
+@bot.message_handler(commands=["rating"])
+def cmd_rating(message: Message) -> None:
+    chat_id = message.chat.id
+    rows = _get_rating(chat_id, limit=10)
+
+    if not rows:
+        bot.reply_to(
+            message,
+            "Рейтинг пока пуст 😶 Используйте /farm_aura, чтобы начать фармить ауру!",
+        )
+        return
+
+    place_emojis = ["🥇", "🥈", "🥉"]
+    lines = ["📊 <b>Рейтинг ауры</b>\n"]
+
+    for i, (name, aura) in enumerate(rows):
+        if i == 0:
+            lines.append(
+                f"{place_emojis[0]} <b>{name}</b> — {aura} 💥\n"
+                f"    😤🔥 Он моггает всех!"
             )
-            return
+        elif i < len(place_emojis):
+            lines.append(f"{place_emojis[i]} {name} — {aura}")
+        else:
+            lines.append(f"{i + 1}. {name} — {aura}")
 
-        place_emojis = ["🥇", "🥈", "🥉"]
-        lines = ["📊 <b>Рейтинг ауры</b>\n"]
-
-        for i, (name, aura) in enumerate(rows):
-            if i == 0:
-                lines.append(
-                    f"{place_emojis[0]} <b>{name}</b> — {aura} 💥\n"
-                    f"    😤🔥 Он моггает всех!"
-                )
-            elif i < len(place_emojis):
-                lines.append(f"{place_emojis[i]} {name} — {aura}")
-            else:
-                lines.append(f"{i + 1}. {name} — {aura}")
-
-        bot.reply_to(message, "\n".join(lines), parse_mode="HTML")
+    bot.reply_to(message, "\n".join(lines), parse_mode="HTML")
 
 
-# ---------- Пример запуска (если хочешь протестировать файл отдельно) ----------
+# ---------- Веб-сервер (нужен для Render Web Service) ----------
+
+@app.route("/", methods=["GET"])
+def health_check():
+    """Render дёргает '/' чтобы понять, что сервис жив."""
+    return "Bot is running", 200
+
+
+@app.route(WEBHOOK_PATH, methods=["POST"])
+def telegram_webhook():
+    """Сюда Telegram присылает обновления вместо polling."""
+    json_data = request.get_data().decode("utf-8")
+    update = telebot.types.Update.de_json(json_data)
+    bot.process_new_updates([update])
+    return "", 200
+
+
+def setup_webhook() -> None:
+    """Сбрасывает старый webhook/polling и ставит новый на текущий адрес Render."""
+    bot.remove_webhook()
+    if EXTERNAL_URL:
+        bot.set_webhook(url=f"{EXTERNAL_URL}{WEBHOOK_PATH}")
+    else:
+        print("RENDER_EXTERNAL_URL не найден — webhook не установлен (нормально при локальном запуске).")
+
+
+init_db()
+setup_webhook()
+
 if __name__ == "__main__":
-    import os
-
-    bot = telebot.TeleBot(os.environ["BOT_TOKEN"])
-    init_db()
-    register_aura_handlers(bot)
-    bot.infinity_polling()
+    # Render передаёт порт через переменную PORT — обязательно слушать именно его.
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
